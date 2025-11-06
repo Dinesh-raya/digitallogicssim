@@ -81,7 +81,10 @@ if 'api_thread_started' not in globals():
 # --- end FastAPI backend ---
 
 
-st.set_page_config(page_title="Digital Logic Sim (Streamlit)", layout="wide")\n\n# Attempt to load frontend build (if present) for a full-featured canvas UI.
+st.set_page_config(page_title="Digital Logic Sim (Streamlit)", layout="wide")
+
+
+# Attempt to load frontend build (if present) for a full-featured canvas UI.
 try:
     from components import load_frontend_component
     built = load_frontend_component()
