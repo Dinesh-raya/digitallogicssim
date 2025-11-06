@@ -4,7 +4,94 @@ from sim import Circuit, Gate
 import uuid
 from PIL import Image, ImageDraw, ImageFont
 
-st.set_page_config(page_title="Digital Logic Sim (Streamlit)", layout="wide")
+# --- FastAPI backend for simulation and persistence ---
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+import threading
+import uvicorn
+import json as _json
+from pathlib import Path
+
+api = FastAPI()
+api.add_middleware(CORSMiddleware, allow_origins=['*'], allow_methods=['*'], allow_headers=['*'])
+
+DATA_DIR = Path(__file__).parent / 'data'
+DATA_DIR.mkdir(exist_ok=True)
+
+@api.post('/evaluate')
+async def evaluate_circuit(payload: dict):
+    # expected payload: { nodes: [...], edges: [...] , inputs: {id: bool, ...} (optional) }
+    try:
+        nodes = payload.get('nodes', [])
+        edges = payload.get('edges', [])
+        # build circuit
+        from sim import Circuit, Gate
+        c = Circuit()
+        for n in nodes:
+            g = Gate(n['id'], n['type'])
+            c.add_gate(g)
+        for e in edges:
+            # default to pin 'a' for connections
+            c.connect(e['from'], e['to'], 'a')
+        inputs = payload.get('inputs', {})
+        for iid, val in inputs.items():
+            if iid in c.gates:
+                try:
+                    c.set_input_value(iid, bool(val))
+                except Exception:
+                    pass
+        vals = c.evaluate()
+        try:
+            import networkx as _nx
+            order = list(_nx.topological_sort(c.G))
+        except Exception:
+            order = list(vals.keys())
+        return {'values': vals, 'order': order}
+        return {'values': vals}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+@api.post('/save')
+async def save_circuit(payload: dict):
+    name = payload.get('name') or ('circuit_' + str(len(list(DATA_DIR.iterdir()))+1))
+    path = DATA_DIR / (name + '.json')
+    path.write_text(_json.dumps(payload, indent=2))
+    return {'saved': str(path.name)}
+
+@api.get('/list')
+async def list_circuits():
+    files = [p.name for p in DATA_DIR.glob('*.json')]
+    return {'files': files}
+
+@api.get('/load')
+async def load_circuit(name: str):
+    path = DATA_DIR / name
+    if not path.exists():
+        raise HTTPException(status_code=404, detail='Not found')
+    return _json.loads(path.read_text())
+
+def run_api():
+    uvicorn.run(api, host='0.0.0.0', port=8000, log_level='info')
+
+# start API in background thread if not already started
+if 'api_thread_started' not in globals():
+    t = threading.Thread(target=run_api, daemon=True)
+    t.start()
+    globals()['api_thread_started'] = True
+# --- end FastAPI backend ---
+
+
+st.set_page_config(page_title="Digital Logic Sim (Streamlit)", layout="wide")\n\n# Attempt to load frontend build (if present) for a full-featured canvas UI.
+try:
+    from components import load_frontend_component
+    built = load_frontend_component()
+    if built:
+        # if frontend served, stop further Streamlit UI (frontend handles UI)
+        st.stop()
+except Exception:
+    pass
+
+
 
 def new_id(prefix="g"):
     import uuid as _uuid

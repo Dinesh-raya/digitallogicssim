@@ -1,0 +1,443 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Digital Logic Sim - Prebuilt</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { margin:0; font-family: Arial, Helvetica, sans-serif; }
+    .app { display:flex; height:100vh; }
+    .sidebar { width:220px; padding:12px; box-sizing:border-box; border-right:1px solid #ddd; background:#f8f9fb; }
+    .canvaswrap { flex:1; background: #ffffff; position:relative; }
+    button { margin:4px 0; padding:6px 8px; width:100%; }
+    .node-list { max-height:200px; overflow:auto; margin-top:8px; }
+    .toolbar h3 { margin:6px 0; }
+    .footer { position:absolute; right:8px; bottom:8px; background:rgba(255,255,255,0.9); padding:6px; border-radius:6px; border:1px solid #ddd; font-size:12px; }
+  </style>
+  <!-- Konva from CDN -->
+  <script src="https://unpkg.com/konva@8/konva.min.js"></script>
+</head>
+<body>
+  <div class="app">
+    <div class="sidebar">
+      <div class="toolbar">
+        <h3>Toolbox</h3>
+        <button id="btn-input">INPUT</button>
+        <button id="btn-output">OUTPUT</button>
+        <button id="btn-and">AND</button>
+        <button id="btn-or">OR</button>
+        <button id="btn-not">NOT</button>\n        <button id="btn-clock">CLOCK</button>\n        <button id="btn-dff">DFF</button>
+<button id="btn-start-clock">Start Clock</button>
+<button id="btn-stop-clock">Stop Clock</button>
+        <hr/>
+        <button id="btn-select">Deselect</button>
+        <button id="btn-connect-mode">Connect Mode: Off</button>
+        <hr/>
+        <div>
+          <strong>Nodes</strong>
+          <div class="node-list" id="node-list"></div>
+        </div>
+        <hr/>
+        <div>
+          <strong>Edges</strong>
+          <div id="edge-list"></div>
+        </div>
+        <hr/>
+        <div>
+          <button id="btn-export">Export JSON</button>
+          <button id="btn-import">Import JSON</button>
+          <input type="file" id="file-input" style="display:none"/>
+        </div>
+      </div>
+    </div>
+    <div class="canvaswrap" id="canvaswrap">
+      <div id="container"></div>
+      <div class="footer">Drag nodes. Click a node to set as source, then click destination to connect. Use Export to save.</div>
+    </div>
+  </div>
+
+  <script>
+    // Simple grid + Konva stage
+    const GRID = 20;
+    const GATE_W = 110;
+    const GATE_H = 50;
+
+    const stage = new Konva.Stage({
+      container: 'container',
+      width: window.innerWidth - 220,
+      height: window.innerHeight,
+      draggable: true
+    });
+    const layer = new Konva.Layer();
+    stage.add(layer);
+
+    // draw grid lines
+    function drawGrid(){
+      const w = stage.width();
+      const h = stage.height();
+      for(let i=0;i<Math.ceil(w/GRID);i++){
+        const line = new Konva.Line({ points:[i*GRID,0,i*GRID,h], stroke:'#f0f0f0', strokeWidth:1 });
+        layer.add(line);
+      }
+      for(let j=0;j<Math.ceil(h/GRID);j++){
+        const line = new Konva.Line({ points:[0,j*GRID,w,j*GRID], stroke:'#f0f0f0', strokeWidth:1 });
+        layer.add(line);
+      }
+    }
+    drawGrid();
+
+    // Data structures
+    let nodes = [];
+    let edges = [];
+    let selectedNode = null;
+    let connectMode = false;
+
+    function uid(prefix){
+      return prefix + '_' + Math.random().toString(36).slice(2,9);
+    }
+
+    function addNode(type, x=120, y=120){
+      const id = uid(type.toLowerCase());
+      const node = { id, type, x: Math.round(x/GRID)*GRID, y: Math.round(y/GRID)*GRID };
+      nodes.push(node);
+      render();
+    }
+
+    function deleteNode(id){
+      nodes = nodes.filter(n=>n.id!==id);
+      edges = edges.filter(e=>e.from!==id && e.to!==id);
+      if(selectedNode === id) selectedNode = null;
+      render();
+    }
+
+    function addEdge(from, to){
+      // avoid duplicates
+      if(edges.find(e=>e.from===from && e.to===to)) return;
+      edges.push({from,to});
+      render();
+    }
+
+    // UI bindings
+    document.getElementById('btn-input').onclick = ()=> addNode('INPUT', 40, 40);
+    document.getElementById('btn-output').onclick = ()=> addNode('OUTPUT', 400, 40);
+    document.getElementById('btn-and').onclick = ()=> addNode('AND', 200, 120);
+    document.getElementById('btn-or').onclick = ()=> addNode('OR', 200, 200);
+    document.getElementById('btn-not').onclick = ()=> addNode('NOT', 320, 160);
+    document.getElementById('btn-select').onclick = ()=> { selectedNode=null; render(); }
+    document.getElementById('btn-connect-mode').onclick = ()=>{
+      connectMode = !connectMode;
+      document.getElementById('btn-connect-mode').innerText = 'Connect Mode: ' + (connectMode ? 'On' : 'Off');
+    }
+
+    // export/import
+    document.getElementById('btn-export').onclick = ()=>{
+      const data = { nodes, edges };
+      const blob = new Blob([JSON.stringify(data,null,2)], {type:'application/json'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = 'circuit.json'; a.click();
+      URL.revokeObjectURL(url);
+    }
+    document.getElementById('btn-import').onclick = ()=> document.getElementById('file-input').click();
+    document.getElementById('file-input').onchange = (ev)=>{
+      const f = ev.target.files[0];
+      if(!f) return;
+      const reader = new FileReader();
+      reader.onload = (e)=>{
+        try{
+          const data = JSON.parse(e.target.result);
+          nodes = data.nodes || [];
+          edges = data.edges || [];
+          selectedNode = null;
+          render();
+        }catch(err){
+          alert('Invalid JSON');
+        }
+      };
+      reader.readAsText(f);
+    }
+
+    // render function draws nodes and edges
+    function render(){
+      layer.destroyChildren();
+      drawGrid();
+
+      // draw edges (curved)
+      edges.forEach((e,i)=>{
+        const from = nodes.find(n=>n.id===e.from);
+        const to = nodes.find(n=>n.id===e.to);
+        if(!from || !to) return;
+        const sx = from.x + GATE_W;
+        const sy = from.y + GATE_H/2;
+        const dx = to.x;
+        const dy = to.y + GATE_H/2;
+        const mx = (sx + dx) / 2;
+        const points = [sx,sy, mx,sy, mx,dy, dx,dy];
+        const line = new Konva.Line({ points, stroke:'#333', strokeWidth:3, tension:0.5, id: 'wire-' + i });
+        layer.add(line);
+      });
+
+      // draw nodes
+      nodes.forEach(n=>{
+        const group = new Konva.Group({ x:n.x, y:n.y, draggable:true, id:n.id });
+        const rect = new Konva.Rect({ width:GATE_W, height:GATE_H, fill: (n.type==='INPUT'?'#e6ffed': (n.type==='OUTPUT'?'#e8eefc':'#fff')), stroke:'#333', cornerRadius:6 });
+        const title = new Konva.Text({ text:n.type, x:8, y:6, fontSize:14 });
+        const sub = new Konva.Text({ text:n.id.slice(0,8), x:8, y:26, fontSize:10, fill:'#444' });
+        group.add(rect); group.add(title); group.add(sub); const dot = new Konva.Circle({ x: GATE_W - 8, y: 8, radius:6, fill:'#ccc', id: 'dot-' + n.id }); group.add(dot);
+        layer.add(group);
+
+        group.on('dragmove', (e)=>{
+          n.x = Math.round(group.x()/GRID)*GRID;
+          n.y = Math.round(group.y()/GRID)*GRID;
+          group.x(n.x); group.y(n.y);
+          render(); // re-render edges
+        });
+
+        group.on('click', (e)=>{
+          if(connectMode){
+            if(selectedNode && selectedNode !== n.id){
+              addEdge(selectedNode, n.id);
+              selectedNode = null;
+            } else {
+              selectedNode = n.id;
+            }
+          } else {
+            selectedNode = n.id;
+          }
+          render();
+        });
+
+        group.on('dblclick', (e)=>{
+          // delete on double click
+          deleteNode(n.id);
+        });
+
+        // highlight if selected
+        if(selectedNode === n.id){
+          rect.stroke('#1e90ff');
+          rect.strokeWidth(4);
+        }
+      });
+
+      // update node list UI
+      const nl = document.getElementById('node-list');
+      nl.innerHTML = '';
+      nodes.forEach(n=>{
+        const div = document.createElement('div');
+        div.style.marginBottom='6px';
+        div.innerHTML = `<strong>${n.id}</strong> (${n.type}) <button data-id="${n.id}" style="margin-left:6px">Select</button> <button data-del="${n.id}" style="margin-left:6px">Del</button>`;
+        nl.appendChild(div);
+        div.querySelector('button[data-id]').onclick = ()=>{
+          selectedNode = n.id; render();
+        }
+        div.querySelector('button[data-del]').onclick = ()=>{
+          deleteNode(n.id);
+        }
+      });
+
+      const el = document.getElementById('edge-list');
+      el.innerHTML = '';
+      edges.forEach(e=>{
+        const d = document.createElement('div');
+        d.textContent = e.from + ' → ' + e.to;
+        el.appendChild(d);
+      });
+
+      layer.draw();
+    }
+
+    // initial sample
+    addNode('INPUT', 40,40);
+    addNode('INPUT', 40,120);
+    addNode('AND', 260,80);
+    addNode('OUTPUT', 460,80);
+    addEdge(nodes[0].id, nodes[2].id);
+    addEdge(nodes[1].id, nodes[2].id);
+    addEdge(nodes[2].id, nodes[3].id);
+
+    render();
+
+    // resize handling
+    window.addEventListener('resize', ()=> {
+      stage.width(window.innerWidth - 220);
+      stage.height(window.innerHeight);
+      render();
+    });
+  </script>
+<button id="btn-run">Run Simulation</button>
+<input type="text" id="save-name" placeholder="save name" style="width:100%; margin-top:6px" />
+<script>
+  async function runSimulation(){
+    const payload = { nodes, edges, inputs: {} };
+    // gather inputs by looking for nodes of type INPUT and prompting or defaulting false
+    nodes.forEach(n => {
+      if(n.type === 'INPUT'){
+        // try to read a stored value on node.value, fallback false
+        payload.inputs[n.id] = n.value ? true : false;
+      }
+    });
+    try{
+      const res = await fetch('http://localhost:8000/evaluate', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
+      const data = await res.json();
+      const vals = data.values || {};
+      // color nodes based on vals
+      nodes.forEach(n => {
+        const v = vals[n.id];
+        // find shape and set fill color
+        const grp = layer.findOne('#' + n.id);
+        if(grp){
+          const rect = grp.findOne('Rect');
+          if(typeof v !== 'undefined'){
+            if(v){
+              rect.fill('#c8ffd1'); // green-ish
+            } else {
+              rect.fill('#ffd6d6'); // red-ish
+            }
+          } else {
+            rect.fill(n.type==='INPUT' ? '#e6ffed' : '#fff');
+          }
+        }
+      });
+      layer.draw();
+    }catch(err){
+      alert('Failed to run simulation: ' + err);
+    }
+  }
+
+  document.getElementById('btn-run').onclick = runSimulation;
+
+  // Save to backend
+  async function saveToBackend(){
+    const name = document.getElementById('save-name').value || ('circuit_' + Date.now());
+    const payload = { name: name, nodes: nodes, edges: edges };
+    try{
+      const res = await fetch('http://localhost:8000/save', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
+      const data = await res.json();
+      alert('Saved as ' + data.saved);
+    }catch(err){
+      alert('Save failed: ' + err);
+    }
+  }
+  document.getElementById('btn-export').onclick = function(){ // override to keep local export but also save to backend prompt
+    saveToBackend();
+  }
+
+  // Load list and allow user to pick
+  async function listCircuits(){
+    try{
+      const res = await fetch('http://localhost:8000/list');
+      const data = await res.json();
+      const files = data.files || [];
+      const name = prompt('Available: ' + files.join(',\n') + '\nEnter filename to load (including .json):');
+      if(name){
+        const lr = await fetch('http://localhost:8000/load?name=' + encodeURIComponent(name));
+        const payload = await lr.json();
+        nodes = payload.nodes || [];
+        edges = payload.edges || [];
+        render();
+      }
+    }catch(err){
+      alert('List/load failed: ' + err);
+    }
+  }
+  document.getElementById('btn-import').onclick = function(){ listCircuits(); }
+</script>
+
+
+
+<script>
+// Additional UI handlers
+document.getElementById('btn-clock').onclick = ()=> addNode('CLOCK', 80, 220);
+document.getElementById('btn-dff').onclick = ()=> addNode('DFF', 360, 220);
+
+async function runSimulationWithOptions(tick=false){
+  const payload = { nodes, edges, inputs: {} , tick: tick };
+  // include node.value for clocks and DFFs initial states
+  nodes.forEach(n => { if(n.type==='CLOCK' || n.type==='DFF') { payload.nodes = payload.nodes || nodes; } });
+  try{
+    const res = await fetch('http://localhost:8000/evaluate', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
+    const data = await res.json();
+    const vals = data.values || {};
+    const order = data.order || [];
+    // color nodes
+    nodes.forEach(n => {
+      const grp = layer.findOne('#' + n.id);
+      if(grp){
+        const rect = grp.findOne('Rect');
+        const v = vals[n.id];
+        if(typeof v !== 'undefined'){
+          rect.fill(v ? '#c8ffd1' : '#ffd6d6');
+        } else {
+          rect.fill(n.type==='INPUT' ? '#e6ffed' : '#fff');
+        }
+        const dot = layer.findOne('#dot-' + n.id);
+        if(dot){
+          if(typeof v !== 'undefined') dot.fill(v ? '#00ff44' : '#ff4444'); else dot.fill('#ccc');
+        }
+      }
+    });
+    // update wire colors
+    edges.forEach((e,i)=>{
+      const wire = layer.findOne('#wire-' + i);
+      if(wire){
+        const val = vals[e.from];
+        if(typeof val !== 'undefined') wire.stroke(val ? '#00cc44' : '#cc0000'); else wire.stroke('#888');
+      }
+    });
+    // animate propagation
+    for(let i=0;i<order.length;i++){
+      const gid = order[i];
+      const grp = layer.findOne('#' + gid);
+      if(grp){
+        // highlight gate
+        const rect = grp.findOne('Rect');
+        rect.stroke('#33bbff'); rect.strokeWidth(3);
+        // pulse outgoing wires
+        edges.filter(e=>e.from===gid).forEach((e, idx)=>{
+          const wire = layer.findOne('#wire-' + edges.indexOf(e));
+          if(wire){ wire.to({ shadowBlur:15, duration:0.08, onFinish: ()=> wire.to({shadowBlur:0, duration:0.08}) }); }
+        });
+        layer.draw();
+        await new Promise(r=>setTimeout(r, 120));
+        rect.stroke('#333'); rect.strokeWidth(1);
+        layer.draw();
+      }
+    }
+  }catch(err){ alert('Run failed: ' + err); }
+}
+
+// wire: update render to set id for wire lines (so we can reference them)
+// We will modify render() below to assign ids and add output dots.
+</script>
+
+
+<script>
+let clockInterval = null;
+document.getElementById('btn-start-clock').onclick = ()=>{
+    if(clockInterval) clearInterval(clockInterval);
+    clockInterval = setInterval(()=>{ runSimulationWithOptions(true); }, 800);
+}
+document.getElementById('btn-stop-clock').onclick = ()=>{
+    if(clockInterval) clearInterval(clockInterval);
+    clockInterval = null;
+}
+
+// Pin selection on connection (prompt for pin)
+function selectPinForEdge(edge){
+    const pin = prompt("Enter target pin for this connection (a, b, d):", "a");
+    edge.pin = pin || "a";
+    return edge;
+}
+
+// Override existing connection creation to use pin selection
+const oldAddEdge = window.addEdge;
+window.addEdge = function(from, to){
+    let e = {from: from.id, to: to.id};
+    e = selectPinForEdge(e);
+    edges.push(e);
+    render();
+    return e;
+}
+</script>
+
+</body>
+</html>

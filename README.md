@@ -18,3 +18,23 @@ docker run -p 8501:8501 logic-sim
 - Topological evaluation order and cycle detection.
 - INPUT gates retain assigned values and OUTPUT reads connected input.
 - Isolated gates evaluate sensibly (INPUT returns assigned value; other isolated gates -> False).
+
+
+## Frontend (React) details
+The `frontend/` folder is a Vite + React + Konva app that implements a professional drag-and-drop canvas.
+To build the frontend bundle (so the Streamlit app can load it):
+
+```bash
+cd frontend
+npm install
+npm run build
+```
+
+After building, run the Streamlit app from the project root:
+
+```bash
+pip install -r requirements.txt
+streamlit run app.py
+```
+
+The Streamlit app will load `frontend/build/index.html` and show the full canvas UI.
